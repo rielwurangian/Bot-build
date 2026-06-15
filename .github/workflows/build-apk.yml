@@ -28,7 +28,11 @@ jobs:
 
       - name: Download project ZIP
         run: |
-          curl -L "${{ inputs.zip_url }}" -o project.zip
+          curl -L \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/octet-stream" \
+            "${{ inputs.zip_url }}" \
+            -o project.zip
           mkdir project
           unzip -o project.zip -d project
 
