@@ -1,0 +1,384 @@
+name: Web2APK Build Bot
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      web_url:
+        description: 'URL website yang akan dibungkus jadi APK'
+        required: false
+        default: ''
+      app_name:
+        description: 'Nama aplikasi APK'
+        required: false
+        default: 'MyWebApp'
+      package_name:
+        description: 'Package name (contoh: com.example.myapp)'
+        required: false
+        default: 'com.example.mywebapp'
+
+jobs:
+  build-apk:
+    name: 🔨 Build APK
+    runs-on: ubuntu-latest
+
+    env:
+      # Ganti nilai ini di repository secrets atau gunakan workflow_dispatch inputs
+      WEB_URL: ${{ github.event.inputs.web_url || vars.WEB_URL || 'https://example.com' }}
+      APP_NAME: ${{ github.event.inputs.app_name || vars.APP_NAME || 'MyWebApp' }}
+      PACKAGE_NAME: ${{ github.event.inputs.package_name || vars.PACKAGE_NAME || 'com.example.mywebapp' }}
+
+    steps:
+      # ── 1. Checkout repo ──────────────────────────────────────────────────────
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Setup Java ─────────────────────────────────────────────────────────
+      - name: ☕ Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # ── 3. Setup Android SDK ──────────────────────────────────────────────────
+      - name: 🤖 Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # ── 4. Cache Gradle ───────────────────────────────────────────────────────
+      - name: 📦 Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # ── 5. Generate Android WebView project ───────────────────────────────────
+      - name: 🛠️ Generate Android WebView Project
+        run: |
+          echo "🌐 URL Target  : $WEB_URL"
+          echo "📱 App Name    : $APP_NAME"
+          echo "📦 Package Name: $PACKAGE_NAME"
+
+          # Buat struktur proyek Android
+          mkdir -p android-project/app/src/main/java/$(echo $PACKAGE_NAME | tr '.' '/')
+          mkdir -p android-project/app/src/main/res/{layout,values,mipmap-hdpi,mipmap-mdpi,mipmap-xhdpi,mipmap-xxhdpi,mipmap-xxxhdpi}
+          mkdir -p android-project/gradle/wrapper
+
+          # ── settings.gradle ──
+          cat > android-project/settings.gradle << 'SETTINGS'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "WebApp"
+          include ':app'
+          SETTINGS
+
+          # ── build.gradle (root) ──
+          cat > android-project/build.gradle << 'ROOTGRADLE'
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+          }
+          ROOTGRADLE
+
+          # ── app/build.gradle ──
+          PKG=$PACKAGE_NAME
+          cat > android-project/app/build.gradle << APPGRADLE
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace '$PKG'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId '$PKG'
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                  }
+                  debug {
+                      applicationIdSuffix '.debug'
+                      debuggable true
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.11.0'
+              implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+              implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+          }
+          APPGRADLE
+
+          # ── gradle wrapper ──
+          cat > android-project/gradle/wrapper/gradle-wrapper.properties << 'WRAPPER'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          WRAPPER
+
+          # ── gradlew ──
+          cp $(which gradle 2>/dev/null || echo /usr/bin/gradle) android-project/gradlew 2>/dev/null || \
+            curl -sL https://raw.githubusercontent.com/gradle/gradle/master/gradlew -o android-project/gradlew
+          chmod +x android-project/gradlew
+
+          # ── proguard-rules.pro ──
+          touch android-project/app/proguard-rules.pro
+
+          # ── AndroidManifest.xml ──
+          NAME=$APP_NAME
+          PKG=$PACKAGE_NAME
+          cat > android-project/app/src/main/AndroidManifest.xml << MANIFEST
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="$NAME"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.WebApp"
+                  android:usesCleartextTraffic="true">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|keyboardHidden"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          MANIFEST
+
+          # ── MainActivity.java ──
+          URL=$WEB_URL
+          PKG_PATH=$(echo $PACKAGE_NAME | tr '.' '/')
+          cat > android-project/app/src/main/java/$PKG_PATH/MainActivity.java << MAINACT
+          package $PACKAGE_NAME;
+
+          import android.os.Bundle;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.view.View;
+          import android.widget.ProgressBar;
+          import androidx.appcompat.app.AppCompatActivity;
+          import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+
+          public class MainActivity extends AppCompatActivity {
+
+              private WebView webView;
+              private SwipeRefreshLayout swipeRefresh;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  setContentView(R.layout.activity_main);
+
+                  webView = findViewById(R.id.webview);
+                  swipeRefresh = findViewById(R.id.swipe_refresh);
+
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setLoadWithOverviewMode(true);
+                  settings.setUseWideViewPort(true);
+                  settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+                  settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public void onPageFinished(WebView view, String url) {
+                          swipeRefresh.setRefreshing(false);
+                      }
+                  });
+
+                  swipeRefresh.setOnRefreshListener(() -> webView.reload());
+
+                  webView.loadUrl("$URL");
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (webView.canGoBack()) {
+                      webView.goBack();
+                  } else {
+                      super.onBackPressed();
+                  }
+              }
+          }
+          MAINACT
+
+          # ── activity_main.xml ──
+          cat > android-project/app/src/main/res/layout/activity_main.xml << 'LAYOUT'
+          <?xml version="1.0" encoding="utf-8"?>
+          <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@+id/swipe_refresh"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent">
+
+              <WebView
+                  android:id="@+id/webview"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent" />
+
+          </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+          LAYOUT
+
+          # ── strings.xml ──
+          cat > android-project/app/src/main/res/values/strings.xml << STRINGS
+          <resources>
+              <string name="app_name">$APP_NAME</string>
+          </resources>
+          STRINGS
+
+          # ── themes.xml ──
+          cat > android-project/app/src/main/res/values/themes.xml << 'THEMES'
+          <resources>
+              <style name="Theme.WebApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+                  <item name="colorPrimary">#6200EE</item>
+                  <item name="colorPrimaryVariant">#3700B3</item>
+                  <item name="colorOnPrimary">#FFFFFF</item>
+                  <item name="colorSecondary">#03DAC5</item>
+                  <item name="colorOnSecondary">#000000</item>
+              </style>
+          </resources>
+          THEMES
+
+          # ── Placeholder launcher icons ──
+          for dir in mipmap-hdpi mipmap-mdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+            for icon in ic_launcher ic_launcher_round; do
+              # Buat PNG placeholder 1x1 transparan (nanti ganti dengan icon asli)
+              printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82' \
+                > android-project/app/src/main/res/$dir/${icon}.png
+            done
+          done
+
+          echo "✅ Proyek Android berhasil digenerate!"
+
+      # ── 6. Build Debug APK ────────────────────────────────────────────────────
+      - name: 🔧 Build Debug APK
+        working-directory: android-project
+        run: |
+          # Install gradle wrapper jika belum ada
+          gradle wrapper --gradle-version 8.4 2>/dev/null || true
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+          echo "✅ Debug APK berhasil dibuild!"
+
+      # ── 7. (Opsional) Build Release APK dengan signing ────────────────────────
+      - name: 🔐 Build Release APK (signed)
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        working-directory: android-project
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > app/release.jks
+
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=$(pwd)/app/release.jks \
+            -Pandroid.injected.signing.store.password=$STORE_PASSWORD \
+            -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
+            -Pandroid.injected.signing.key.password=$KEY_PASSWORD \
+            --no-daemon
+
+          echo "✅ Release APK berhasil dibuild dan di-sign!"
+
+      # ── 8. Upload artifact APK ────────────────────────────────────────────────
+      - name: 📤 Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk-${{ github.run_number }}
+          path: android-project/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      - name: 📤 Upload Release APK
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk-${{ github.run_number }}
+          path: android-project/app/build/outputs/apk/release/*.apk
+          retention-days: 30
+
+      # ── 9. Buat GitHub Release (hanya saat push ke main) ─────────────────────
+      - name: 🚀 Create GitHub Release
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "APK Build #${{ github.run_number }}"
+          body: |
+            🤖 **Auto-build by Web2APK Bot**
+
+            | Info       | Detail |
+            |------------|--------|
+            | 🌐 URL     | ${{ env.WEB_URL }} |
+            | 📱 App     | ${{ env.APP_NAME }} |
+            | 📦 Package | ${{ env.PACKAGE_NAME }} |
+            | 🔢 Build   | #${{ github.run_number }} |
+            | 📅 Date    | ${{ github.event.repository.updated_at }} |
+
+            Download APK di tab **Assets** di bawah ⬇️
+          files: android-project/app/build/outputs/apk/**/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 10. Summary ───────────────────────────────────────────────────────────
+      - name: 📊 Build Summary
+        run: |
+          echo "## 🎉 Build Selesai!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Info | Detail |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🌐 URL | $WEB_URL |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📱 App | $APP_NAME |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 Package | $PACKAGE_NAME |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔢 Build | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "APK tersedia di tab **Artifacts** atau **Releases**." >> $GITHUB_STEP_SUMMARY
