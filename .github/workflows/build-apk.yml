@@ -1,0 +1,59 @@
+name: Build Flutter APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Build tag (ID unik)'
+        required: true
+      zip_url:
+        description: 'URL ZIP project Flutter'
+        required: true
+      build_type:
+        description: 'debug atau release'
+        required: true
+        default: 'release'
+
+run-name: ${{ inputs.tag }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      - name: Download project ZIP
+        run: |
+          curl -L "${{ inputs.zip_url }}" -o project.zip
+          mkdir project
+          unzip -o project.zip -d project
+
+      - name: Find project root (folder yang ada pubspec.yaml)
+        id: find_root
+        run: |
+          ROOT=$(find project -name "pubspec.yaml" -printf '%h\n' | head -1)
+          echo "root=$ROOT" >> $GITHUB_OUTPUT
+
+      - name: Get dependencies
+        working-directory: ${{ steps.find_root.outputs.root }}
+        run: flutter pub get
+
+      - name: Build APK (Debug)
+        if: ${{ inputs.build_type == 'debug' }}
+        working-directory: ${{ steps.find_root.outputs.root }}
+        run: flutter build apk --debug
+
+      - name: Build APK (Release)
+        if: ${{ inputs.build_type == 'release' }}
+        working-directory: ${{ steps.find_root.outputs.root }}
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-build
+          path: ${{ steps.find_root.outputs.root }}/build/app/outputs/flutter-apk/*.apk
